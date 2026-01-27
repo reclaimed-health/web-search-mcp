@@ -81,8 +81,8 @@ export class BrowserPool {
       // 3. args: Xvfb display (if needed, usually handled by env DISPLAY)
 
       const browser = await chromium.launch({
-        channel: 'chrome',
-        headless: false,
+        // channel: 'chrome', // Use bundled chromium
+        headless: true, // Use headless to avoid Xvfb requirement
         args: [
           '--no-sandbox', // Still often needed in Docker/Root
           '--disable-dev-shm-usage', // Docker memory limit fix
@@ -94,7 +94,7 @@ export class BrowserPool {
         ],
         // Set env explicitly if we want to force Xvfb display, though usually it's set in shell
         env: {
-          ...process.env,
+          ...process.env as Record<string, string>,
           // If DISPLAY is missing and we think we are in headless linux, maybe default to :99?
           // Note: Setting DISPLAY here blindly might break if Xvfb isn't running on :99.
           // Better to assume the user/script sets up the environment (like docker-compose or setup script).
