@@ -3,16 +3,35 @@ import * as cheerio from 'cheerio';
 import { SearchOptions, SearchResult, SearchResultWithMetadata } from './types.js';
 import { generateTimestamp, sanitizeQuery } from './utils.js';
 import { RateLimiter } from './rate-limiter.js';
+import { BraveApiRateLimiter } from './brave-api-rate-limiter.js';
 import { BrowserPool } from './browser-pool.js';
 import { getRandomPersona } from './personas.js';
 
+// Brave Search API configuration
+const BRAVE_API_KEY = process.env.BRAVE_API_KEY;
+const BRAVE_API_REQUESTS_PER_SECOND = parseInt(process.env.BRAVE_API_REQUESTS_PER_SECOND || '1', 10);
+const BRAVE_API_MAX_MONTHLY_REQUESTS = parseInt(process.env.BRAVE_API_MAX_MONTHLY_REQUESTS || '2000', 10);
+
 export class SearchEngine {
   private readonly rateLimiter: RateLimiter;
+  private readonly braveApiRateLimiter: BraveApiRateLimiter;
   private browserPool: BrowserPool;
+  private readonly hasBraveApiKey: boolean;
 
   constructor() {
     this.rateLimiter = new RateLimiter(10); // 10 requests per minute
+    this.braveApiRateLimiter = new BraveApiRateLimiter(
+      BRAVE_API_REQUESTS_PER_SECOND,
+      BRAVE_API_MAX_MONTHLY_REQUESTS
+    );
     this.browserPool = new BrowserPool();
+    this.hasBraveApiKey = !!BRAVE_API_KEY;
+
+    if (this.hasBraveApiKey) {
+      console.log(`[SearchEngine] Brave Search API enabled (${BRAVE_API_REQUESTS_PER_SECOND} req/sec, ${BRAVE_API_MAX_MONTHLY_REQUESTS}/month limit)`);
+    } else {
+      console.log('[SearchEngine] Brave Search API not configured - using browser-based search fallbacks');
+    }
   }
 
   async search(options: SearchOptions): Promise<SearchResultWithMetadata> {
@@ -34,12 +53,21 @@ export class SearchEngine {
         console.log(`[SearchEngine] Quality checking: ${enableQualityCheck}, threshold: ${qualityThreshold}, multi-engine: ${forceMultiEngine}, debug: ${debugBrowsers}`);
 
         // Try multiple approaches to get search results, starting with most reliable
-        const approaches = [
-          { method: this.tryBrowserDuckDuckGoSearch.bind(this), name: 'Browser DuckDuckGo' },
-          { method: this.tryBrowserBingSearch.bind(this), name: 'Browser Bing' },
-          { method: this.tryBrowserBraveSearch.bind(this), name: 'Browser Brave' },
-          { method: this.tryDuckDuckGoSearch.bind(this), name: 'Axios DuckDuckGo' }
-        ];
+        // Brave API is preferred when available (fast, reliable, structured data)
+        const approaches = this.hasBraveApiKey
+          ? [
+              { method: this.tryBraveApiSearch.bind(this), name: 'Brave API' },
+              { method: this.tryBrowserDuckDuckGoSearch.bind(this), name: 'Browser DuckDuckGo' },
+              { method: this.tryBrowserBingSearch.bind(this), name: 'Browser Bing' },
+              { method: this.tryBrowserBraveSearch.bind(this), name: 'Browser Brave' },
+              { method: this.tryDuckDuckGoSearch.bind(this), name: 'Axios DuckDuckGo' }
+            ]
+          : [
+              { method: this.tryBrowserDuckDuckGoSearch.bind(this), name: 'Browser DuckDuckGo' },
+              { method: this.tryBrowserBingSearch.bind(this), name: 'Browser Bing' },
+              { method: this.tryBrowserBraveSearch.bind(this), name: 'Browser Brave' },
+              { method: this.tryDuckDuckGoSearch.bind(this), name: 'Axios DuckDuckGo' }
+            ];
 
         let bestResults: SearchResult[] = [];
         let bestEngine = 'None';
@@ -111,6 +139,65 @@ export class SearchEngine {
       }
       throw new Error(`Failed to perform search: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Search using the official Brave Search API
+   * Requires BRAVE_API_KEY environment variable
+   * Rate limited to 1 req/sec and 2000 req/month
+   */
+  private async tryBraveApiSearch(query: string, numResults: number, timeout: number): Promise<SearchResult[]> {
+    if (!BRAVE_API_KEY) {
+      throw new Error('Brave API key not configured');
+    }
+
+    console.log(`[SearchEngine] Trying Brave Search API...`);
+
+    return await this.braveApiRateLimiter.execute(async () => {
+      const response = await axios.get('https://api.search.brave.com/res/v1/web/search', {
+        params: {
+          q: query,
+          count: Math.min(numResults, 20), // Brave API max is 20 per request
+          offset: 0,
+          safesearch: 'moderate',
+          text_decorations: false,
+        },
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': BRAVE_API_KEY,
+        },
+        timeout,
+      });
+
+      const timestamp = generateTimestamp();
+      const results: SearchResult[] = [];
+
+      // Parse web results from the API response
+      const webResults = response.data?.web?.results || [];
+      console.log(`[SearchEngine] Brave API returned ${webResults.length} web results`);
+
+      for (const result of webResults) {
+        if (results.length >= numResults) break;
+
+        results.push({
+          title: result.title || '',
+          url: result.url || '',
+          description: result.description || '',
+          fullContent: '',
+          contentPreview: '',
+          wordCount: 0,
+          timestamp,
+          fetchStatus: 'success',
+        });
+      }
+
+      // Log API usage status
+      const status = await this.braveApiRateLimiter.getStatus();
+      console.log(`[SearchEngine] Brave API monthly usage: ${status.monthlyUsed}/${status.monthlyLimit} (${status.monthlyRemaining} remaining)`);
+
+      return results;
+    });
   }
 
   private async tryBrowserDuckDuckGoSearch(query: string, numResults: number, timeout: number): Promise<SearchResult[]> {

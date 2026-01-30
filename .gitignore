@@ -92,4 +92,7 @@ jspm_packages/
 .fusebox/
 
 # DynamoDB Local files
-.dynamodb/ 
+.dynamodb/
+
+# Brave API usage tracking (contains request counts)
+.brave-api-usage.json 

@@ -30,6 +30,7 @@
     "@modelcontextprotocol/sdk": "^1.15.0",
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^17.2.3",
     "p-limit": "^6.2.0",
     "p-retry": "^6.2.1",
     "playwright": "^1.48.0",

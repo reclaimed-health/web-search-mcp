@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 // @ts-nocheck
+
+// Load environment variables from .env file before anything else
+import 'dotenv/config';
+
 console.error('Web Search MCP Server starting...');
 
 // Keep stdout reserved for MCP traffic by mirroring console.log to stderr.
